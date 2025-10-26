@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"flag"
@@ -13,7 +14,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/gorilla/mux"
 
@@ -79,7 +79,7 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *manager) error {
 
 			// TODO: use a state map and track if a item was removed -> remove from queue
 			// check if device was inserted (inserted == 1, removed == 3), see: https://github.com/USBGuard/usbguard/blob/main/src/DBus/DBusInterface.xml#L169
-			if state != 1 {
+			if state != 1 && state != 3 {
 				continue
 			}
 
@@ -97,8 +97,15 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *manager) error {
 				continue
 			}
 
-			mm.addEntry(id)
-			level.Info(logger).Log("msg", "Added entry", "name", name, "id", id)
+			switch state {
+			case 1:
+				mm.addEntry(id)
+				level.Info(logger).Log("msg", "Added entry", "name", name, "id", id)
+			case 3:
+				mm.removeEntry(id)
+				level.Info(logger).Log("msg", "Removed entry", "name", name, "id", id)
+			}
+
 		case <-ctx.Done():
 			level.Info(logger).Log("msg", "parent ctx finished")
 			return nil
@@ -119,21 +126,23 @@ type dRead struct {
 
 // Replace with a direct canel and a global counter -> for early reject?
 type manager struct {
-	wC       int64
-	state    chan int
-	dbus     chan dWrite
-	requests chan dRead
+	queue      *list.List
+	state      chan int
+	dbus       chan dWrite
+	dbusRemove chan dWrite
+	requests   chan dRead
 }
 
 func newManager() *manager {
 	return &manager{
+		queue: list.New(),
 		// Queue
 		state: make(chan int, 100),
 		// add item to queue
-		dbus: make(chan dWrite),
+		dbus:       make(chan dWrite),
+		dbusRemove: make(chan dWrite),
 		// request item
 		requests: make(chan dRead),
-		wC:       0,
 	}
 }
 
@@ -141,10 +150,33 @@ func (m *manager) start(ctx context.Context, logger log.Logger) error {
 	for {
 		select {
 		case write := <-m.dbus:
-			m.state <- write.id
+			id := write.id
+			m.queue.PushBack(id)
+		case remove := <-m.dbusRemove:
+			// remove the id from the list as it was removed from the device
+			id := remove.id
+			var r *list.Element
+			for e := m.queue.Front(); e != nil; e = e.Next() {
+				if e.Value == id {
+					r = e
+				}
+			}
+
+			// id could have been accepted already so we must check for nil
+			if r != nil {
+				m.queue.Remove(r)
+			}
+
 		case read := <-m.requests:
-			item := <-m.state
-			read.resp <- item
+			var val int
+			f := m.queue.Front()
+			if f == nil {
+				val = -1
+			} else {
+				m.queue.Remove(f)
+				val = f.Value.(int)
+			}
+			read.resp <- val
 		case <-ctx.Done():
 			level.Info(logger).Log("msg", "finished manager")
 			return nil
@@ -158,12 +190,18 @@ func (m *manager) addEntry(id int) {
 	}
 
 	m.dbus <- a
+}
 
-	atomic.AddInt64(&m.wC, 1)
+func (m *manager) removeEntry(id int) {
+	a := dWrite{
+		id: id,
+	}
+
+	m.dbusRemove <- a
 }
 
 func (m *manager) requestEntry() (int, error) {
-	if atomic.LoadInt64(&m.wC) <= 0 {
+	if m.queue.Len() <= 0 {
 		return 0, ErrNoItems
 	}
 
@@ -175,7 +213,6 @@ func (m *manager) requestEntry() (int, error) {
 
 	id := <-cc.resp
 
-	atomic.AddInt64(&m.wC, -1)
 	return id, nil
 }
 
