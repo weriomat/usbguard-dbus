@@ -91,13 +91,12 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 
 			switch state {
 			case 1:
-				mm.addEntry(id)
-				fmt.Printf("{\"text\": %s}\n", name)
+				mm.addEntry(id, name)
 				level.Info(logger).Log("msg", "Added entry", "name", name, "id", id)
 			case 3:
-				mm.removeEntry(id)
-				fmt.Printf("{\"text\": \"\"}\n")
-				level.Info(logger).Log("msg", "Removed entry", "name", name, "id", id)
+				// NOTE: the device might already have been accepted/ rejected
+				mm.removeEntry(id, name)
+				level.Info(logger).Log("msg", "Removed entry due to device disappearing", "name", name, "id", id)
 			}
 
 		case <-ctx.Done():

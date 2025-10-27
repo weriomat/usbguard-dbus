@@ -12,7 +12,8 @@ import (
 
 // Dbus generated msg
 type dWrite struct {
-	id int
+	id   int
+	name string
 }
 
 // http api generated msg
@@ -46,14 +47,12 @@ func (m *Manager) start(ctx context.Context, logger log.Logger) error {
 	for {
 		select {
 		case write := <-m.dbus:
-			id := write.id
-			m.queue.PushBack(id)
+			m.queue.PushBack(write)
 		case remove := <-m.dbusRemove:
 			// remove the id from the list as it was removed from the device
-			id := remove.id
 			var r *list.Element
 			for e := m.queue.Front(); e != nil; e = e.Next() {
-				if e.Value == id {
+				if e.Value == remove {
 					r = e
 				}
 			}
@@ -64,15 +63,18 @@ func (m *Manager) start(ctx context.Context, logger log.Logger) error {
 			}
 
 		case read := <-m.requests:
-			var val int
+			var val dWrite
 			f := m.queue.Front()
 			if f == nil {
-				val = -1
+				val = dWrite{
+					id:   -1,
+					name: "",
+				}
 			} else {
 				m.queue.Remove(f)
-				val = f.Value.(int)
+				val = f.Value.(dWrite)
 			}
-			read.resp <- val
+			read.resp <- val.id
 		case <-ctx.Done():
 			level.Info(logger).Log("msg", "finished manager")
 			return nil
@@ -80,17 +82,19 @@ func (m *Manager) start(ctx context.Context, logger log.Logger) error {
 	}
 }
 
-func (m *Manager) addEntry(id int) {
+func (m *Manager) addEntry(id int, name string) {
 	a := dWrite{
-		id: id,
+		id:   id,
+		name: name,
 	}
 
 	m.dbus <- a
 }
 
-func (m *Manager) removeEntry(id int) {
+func (m *Manager) removeEntry(id int, name string) {
 	a := dWrite{
-		id: id,
+		id:   id,
+		name: name,
 	}
 
 	m.dbusRemove <- a
