@@ -41,9 +41,10 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 
 	for {
 		select {
+		// Add/ remove device if Presence changed + remove device if Policy to allow/ reject was applied
 		case v := <-c:
-			// We are only interested if a new device appears
-			if v.Name != "org.usbguard.Devices1.DevicePresenceChanged" {
+			// We are only interested if a new device appears/ Policy to allow/reject was applied
+			if v.Name == "org.usbguard.Devices1.DevicePolicyChanged" {
 				continue
 			}
 
@@ -57,9 +58,13 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 				continue
 			}
 
-			// TODO: use a state map and track if a item was removed -> remove from queue
-			// check if device was inserted (inserted == 1, removed == 3), see: https://github.com/USBGuard/usbguard/blob/main/src/DBus/DBusInterface.xml#L169
-			if state != 1 && state != 3 {
+			// Presence: check if device was inserted (inserted == 1, removed == 3), see: https://github.com/USBGuard/usbguard/blob/main/src/DBus/DBusInterface.xml#L169
+			if v.Name == "org.usbguard.Devices1.DevicePresenceChanged" && state != 1 && state != 3 {
+				continue
+			}
+
+			// PolicyApplied: check if device is allowed (0)/ rejected (block == 1), see: https://github.com/USBGuard/usbguard/blob/main/src/DBus/DBusInterface.xml#L243
+			if v.Name == "org.usbguard.Devices1.DevicePolicyApplied" && state == 1 {
 				continue
 			}
 
@@ -77,6 +82,13 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 				continue
 			}
 
+			// Device was allowed/ rejected (possible manually via usbguard cli)
+			if v.Name == "org.usbguard.Devices1.DevicePolicyApplied" {
+				mm.removeEntry(id, name)
+				level.Info(logger).Log("msg", "Removed entry due to PolicyApplied", "name", name, "id", id, "state", state)
+				continue
+			}
+
 			switch state {
 			case 1:
 				mm.addEntry(id)
@@ -91,7 +103,6 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 		case <-ctx.Done():
 			level.Info(logger).Log("msg", "parent ctx finished")
 			return nil
-
 		}
 	}
 }
