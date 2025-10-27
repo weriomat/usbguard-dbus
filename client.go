@@ -90,7 +90,6 @@ func (c *WebSocketClient) readPump() {
 				websocket.CloseAbnormalClosure) {
 				level.Error(c.logger).Log("msg", "Websocketed failed", "err", err)
 			}
-			level.Error(c.logger).Log("msg", "Websocketed failed", "err", err)
 			return
 		}
 
