@@ -16,11 +16,31 @@ func webserver(ctx context.Context, logger log.Logger, socketPath string, mm *Ma
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	socket, err := net.Listen("unix", socketPath)
+	sD := os.Getenv("XDG_RUNTIME_DIR")
 
+	// check if dir exists
+	_, err := os.Stat(sD)
 	if err != nil {
-		level.Error(logger).Log("msg", "Failed to listen on unix socket")
+		level.Error(logger).Log("msg", "XDG_RUNTIME_DIR does not exist", "err", err)
 		return err
+	}
+
+	listeners, err := activation.Listeners()
+	if err != nil {
+		level.Error(logger).Log("msg", "Failed to receive activation listener from systemd, creating own", "err", err)
+	}
+
+	var socket net.Listener
+	if len(listeners) >= 1 {
+		socket = listeners[0]
+	} else {
+		socketPath := path.Join(sD, "usbguard-dbus.sock")
+
+		socket, err = net.Listen("unix", socketPath)
+		if err != nil {
+			level.Error(logger).Log("msg", "Failed to listen on unix socket")
+			return err
+		}
 	}
 
 	defer socket.Close()

@@ -115,7 +115,7 @@ func main() {
 
 			level.Info(logger).Log("msg", "Webserver started")
 
-			err := webserver(ctx, logger, *socketPath, manager)
+			err := webserver(ctx, logger, manager)
 
 			if err == nil {
 				level.Info(logger).Log("msg", "Stopped webserver")
