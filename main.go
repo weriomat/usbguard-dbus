@@ -52,10 +52,11 @@ func dialApi(ctx context.Context, logger log.Logger, socketPath string, endpoint
 func main() {
 	accept := flag.Bool("accept", false, "send the accept command to the api")
 	reject := flag.Bool("reject", false, "send the reject command to the api")
-	socketPath := flag.String("socket", "./usbguard-dbus.sock", "the path of the socket to use")
+	listen := flag.Bool("listen", false, "listen to incoming messages using a websocket over a unix socket")
+	socketPath := flag.String("socket", "./usbguard-dbus.sock", "the path of the socket to use (only for accept/ reject)")
 	flag.Parse()
 
-	if *accept && *reject {
+	if (*accept && *reject) || (*accept && *listen) || (*reject && *listen) {
 		fmt.Println("Cannot accept and reject at the same time")
 		os.Exit(1)
 	}
@@ -66,7 +67,17 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	eg, ctx := errgroup.WithContext(ctx)
 
-	if *accept {
+	if *listen {
+		eg.Go(func() error {
+			defer cancel()
+
+			logger := log.With(logger, "component", "client")
+
+			err := startListenerClient(ctx, logger, *socketPath)
+
+			return err
+		})
+	} else if *accept {
 		eg.Go(func() error {
 			defer cancel()
 
