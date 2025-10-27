@@ -3,6 +3,7 @@ package main
 import (
 	"container/list"
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/go-kit/log"
@@ -23,6 +24,7 @@ type dRead struct {
 
 // Replace with a direct canel and a global counter -> for early reject?
 type Manager struct {
+	hub        *Hub
 	queue      *list.List
 	state      chan int
 	dbus       chan dWrite
@@ -40,7 +42,12 @@ func newManager() *Manager {
 		dbusRemove: make(chan dWrite),
 		// request item
 		requests: make(chan dRead),
+		hub:      nil,
 	}
+}
+
+func (m *Manager) addHub(h *Hub) {
+	m.hub = h
 }
 
 func (m *Manager) start(ctx context.Context, logger log.Logger) error {
@@ -78,6 +85,19 @@ func (m *Manager) start(ctx context.Context, logger log.Logger) error {
 		case <-ctx.Done():
 			level.Info(logger).Log("msg", "finished manager")
 			return nil
+		}
+
+		// Update WS Clients
+		if m.hub != nil {
+			var name string
+			if m.queue.Len() > 0 {
+				name = m.queue.Front().Value.(dWrite).name
+			} else {
+				name = ""
+			}
+
+			notification, _ := json.Marshal(map[string]string{"text": name})
+			m.hub.broadcastMessage(notification, nil)
 		}
 	}
 }

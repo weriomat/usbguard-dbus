@@ -1,18 +1,234 @@
 package main
 
+// Modeled after: https://github.com/gorilla/websocket/tree/main/examples/chat and https://websocket.org/guides/languages/go/#concurrent-connection-management
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path"
+	"sync"
+	"time"
 
+	"github.com/coreos/go-systemd/activation"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 	"golang.org/x/sync/errgroup"
 )
 
-func webserver(ctx context.Context, logger log.Logger, socketPath string, mm *Manager) error {
+const (
+	// Time allowed to write a message to the peer.
+	writeWait = 10 * time.Second
+
+	// Time allowed to read the next pong message from the peer.
+	pongWait = 60 * time.Second
+
+	// Send pings to peer with this period. Must be less than pongWait.
+	pingPeriod = (pongWait * 9) / 10
+
+	// Maximum message size allowed from peer.
+	maxMessageSize = 512
+)
+
+var (
+	newline  = []byte{'\n'}
+	space    = []byte{' '}
+	upgrader = websocket.Upgrader{
+		ReadBufferSize: 1024, WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool { // Configure origin checking for production
+			return true
+		},
+	}
+)
+
+func generateID() string {
+	return fmt.Sprintf("client_%d", time.Now().UnixNano())
+}
+
+type Client struct {
+	ID  string
+	hub *Hub
+
+	// The websocket connection.
+	conn *websocket.Conn
+
+	// Buffered channel of outbound messages.
+	send chan []byte
+}
+
+func (c *Client) readPump() {
+	defer func() {
+		level.Info(c.hub.logger).Log("msg", "Closing read pump of client", "client", c.ID)
+		c.hub.unregister <- c
+		c.conn.Close()
+	}()
+	c.conn.SetReadLimit(maxMessageSize)
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
+	for {
+		_, message, err := c.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				level.Error(c.hub.logger).Log("msg", "WS error", "err", err)
+			}
+			break
+		}
+
+		level.Info(c.hub.logger).Log("msg", "got msg from client", "message", message, "client", c.ID)
+	}
+}
+
+func (c *Client) writePump() {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.conn.Close()
+	}()
+	for {
+		select {
+		case message, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			c.conn.WriteMessage(websocket.TextMessage, message)
+
+			// w, err := c.conn.NextWriter(websocket.TextMessage)
+			// if err != nil {
+			// 	return
+			// }
+			// w.Write(message)
+
+			// // Add queued chat messages to the current websocket message.
+			// n := len(c.send)
+			// for i := 0; i < n; i++ {
+			// 	w.Write(newline)
+			// 	w.Write(<-c.send)
+			// }
+
+			// if err := w.Close(); err != nil {
+			// 	return
+			// }
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// serveWs handles websocket requests from the peer.
+func (h *Hub) serveWs(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		level.Error(h.logger).Log("msg", "Failed to upgrade connection", "err", err)
+		return
+	}
+
+	// Get client ID from query params or generate
+	clientID := r.URL.Query().Get("id")
+	if clientID == "" {
+		clientID = generateID()
+	}
+
+	client := &Client{
+		hub:  h,
+		conn: conn,
+		send: make(chan []byte, 256),
+		ID:   clientID,
+	}
+
+	h.register <- client
+
+	// Allow collection of memory referenced by the caller by doing all work in
+	// new goroutines.
+	go client.writePump()
+	go client.readPump()
+}
+
+type Hub struct {
+	// Context
+	ctx context.Context
+
+	// Logger
+	logger log.Logger
+	// Registered clients.
+	clients map[*Client]bool
+
+	// Inbound messages from the clients.
+	broadcast chan []byte
+
+	// Register requests from the clients.
+	register chan *Client
+
+	// Unregister requests from clients.
+	unregister chan *Client
+	mu         sync.RWMutex
+}
+
+func newHub(ctx context.Context, logger log.Logger) *Hub {
+	return &Hub{
+		broadcast:  make(chan []byte),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
+		clients:    make(map[*Client]bool),
+		ctx:        ctx,
+		logger:     logger,
+		mu:         sync.RWMutex{},
+	}
+}
+
+func (h *Hub) run() {
+	for {
+		select {
+		case client := <-h.register:
+			h.mu.Lock()
+			h.clients[client] = true
+			h.mu.Unlock()
+			level.Info(h.logger).Log("msg", "Client registered", "id", client.ID)
+		case client := <-h.unregister:
+			h.mu.Lock()
+			if _, ok := h.clients[client]; ok {
+				delete(h.clients, client)
+				close(client.send)
+			}
+			h.mu.Unlock()
+			level.Info(h.logger).Log("msg", "Client unregistered", "id", client.ID)
+		case message := <-h.broadcast:
+			h.broadcastMessage(message, nil)
+		case <-h.ctx.Done():
+			level.Info(h.logger).Log("msg", "Hub context done")
+			return
+		}
+	}
+}
+
+func (h *Hub) broadcastMessage(message []byte, exclude *Client) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	level.Info(h.logger).Log("msg", "broadcasting message", "message", message)
+	for client := range h.clients {
+		if client != exclude {
+			select {
+			case client.send <- message:
+			default:
+				// Client's send channel is full, close it
+				delete(h.clients, client)
+				close(client.send)
+			}
+		}
+	}
+
+}
+
+func webserver(ctx context.Context, logger log.Logger, mm *Manager) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -67,9 +283,21 @@ func webserver(ctx context.Context, logger log.Logger, socketPath string, mm *Ma
 		}
 	}).Methods(http.MethodGet)
 
+	hub := newHub(ctx, logger)
+	mm.addHub(hub)
+
+	m.HandleFunc("/ws", hub.serveWs)
+
 	srv := http.Server{Handler: m}
 
 	eg, ctx := errgroup.WithContext(subCtx)
+
+	eg.Go(func() error {
+		defer cancel()
+
+		hub.run()
+		return nil
+	})
 
 	// clean shutdown
 	eg.Go(func() error {
@@ -96,7 +324,7 @@ func webserver(ctx context.Context, logger log.Logger, socketPath string, mm *Ma
 	eg.Go(func() error {
 		defer cancel()
 
-		level.Info(logger).Log("msg", "Starting webserver", "address", socket)
+		level.Info(logger).Log("msg", "Starting webserver", "address", socket.Addr().String())
 
 		err := srv.Serve(socket)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
