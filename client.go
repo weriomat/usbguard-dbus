@@ -148,6 +148,8 @@ func startListenerClient(ctx context.Context, logger log.Logger, socketPath stri
 	}
 	defer client.Close()
 
+	fmt.Println("{\"text\": \"\"}")
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -161,7 +163,7 @@ func startListenerClient(ctx context.Context, logger log.Logger, socketPath stri
 				continue
 			}
 
-			fmt.Print(string(message))
+			fmt.Println(string(message))
 		}
 	}
 }
