@@ -41,9 +41,9 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 
 	for {
 		select {
-		// Add/ remove device if Presence changed + remove device if Policy to allow/ reject was applied
+		// Add if device policy of block (default) was applied, remove if device is removed/ allowed or rejected
 		case v := <-c:
-			// We are only interested if a new device appears/ Policy to allow/reject was applied
+			// We are not interested if a policy changed
 			if v.Name == "org.usbguard.Devices1.DevicePolicyChanged" {
 				continue
 			}
@@ -55,16 +55,6 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 					"msg", "Failed to convert the state to a int",
 					"err", err,
 				)
-				continue
-			}
-
-			// Presence: check if device was inserted (inserted == 1, removed == 3), see: https://github.com/USBGuard/usbguard/blob/main/src/DBus/DBusInterface.xml#L169
-			if v.Name == "org.usbguard.Devices1.DevicePresenceChanged" && state != 1 && state != 3 {
-				continue
-			}
-
-			// PolicyApplied: check if device is allowed (0)/ rejected (block == 1), see: https://github.com/USBGuard/usbguard/blob/main/src/DBus/DBusInterface.xml#L243
-			if v.Name == "org.usbguard.Devices1.DevicePolicyApplied" && state == 1 {
 				continue
 			}
 
@@ -82,23 +72,24 @@ func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
 				continue
 			}
 
-			// Device was allowed/ rejected (possible manually via usbguard cli)
-			if v.Name == "org.usbguard.Devices1.DevicePolicyApplied" {
+			// Presence: check if device was inserted (inserted == 1, removed == 3), see: https://github.com/USBGuard/usbguard/blob/main/src/DBus/DBusInterface.xml#L169
+			if v.Name == "org.usbguard.Devices1.DevicePresenceChanged" && state == 3 {
 				mm.removeEntry(id, name)
-				level.Info(logger).Log("msg", "Removed entry due to PolicyApplied", "name", name, "id", id, "state", state)
+				level.Info(logger).Log("msg", "Removed entry due to Device being removed", "name", name, "id", id)
 				continue
 			}
 
 			switch state {
-			case 1:
-				mm.addEntry(id, name)
-				level.Info(logger).Log("msg", "Added entry", "name", name, "id", id)
-			case 3:
-				// NOTE: the device might already have been accepted/ rejected
+			case 0: // Allow
 				mm.removeEntry(id, name)
-				level.Info(logger).Log("msg", "Removed entry due to device disappearing", "name", name, "id", id)
+				level.Info(logger).Log("msg", "Removed entry due to PolicyApplied", "name", name, "id", id, "state", state)
+			case 1: // Block
+				mm.addEntry(id, name)
+				level.Info(logger).Log("msg", "Added entry due to PolicyApplied", "name", name, "id", id, "state", state)
+			case 2: // Reject
+				mm.removeEntry(id, name)
+				level.Info(logger).Log("msg", "Removed entry due to PolicyApplied", "name", name, "id", id, "state", state)
 			}
-
 		case <-ctx.Done():
 			level.Info(logger).Log("msg", "parent ctx finished")
 			return nil
