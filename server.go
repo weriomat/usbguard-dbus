@@ -60,7 +60,6 @@ type client struct {
 
 func (c *client) readPump() {
 	defer func() {
-		level.Info(c.hub.logger).Log("msg", "Closing read pump of client", "client", c.ID)
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
@@ -172,7 +171,6 @@ func (h *hub) run() {
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
-			level.Info(h.logger).Log("msg", "Client registered", "id", client.ID)
 		case client := <-h.unregister:
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
@@ -180,7 +178,6 @@ func (h *hub) run() {
 				close(client.send)
 			}
 			h.mu.Unlock()
-			level.Info(h.logger).Log("msg", "Client unregistered", "id", client.ID)
 		case message := <-h.broadcast:
 			h.broadcastMessage(message, nil)
 		case <-h.ctx.Done():
