@@ -23,8 +23,8 @@ type dRead struct {
 }
 
 // Replace with a direct canel and a global counter -> for early reject?
-type Manager struct {
-	hub        *Hub
+type manager struct {
+	hub        *hub
 	queue      *list.List
 	state      chan int
 	dbus       chan dWrite
@@ -32,8 +32,8 @@ type Manager struct {
 	requests   chan dRead
 }
 
-func newManager() *Manager {
-	return &Manager{
+func newManager() *manager {
+	return &manager{
 		queue: list.New(),
 		// Queue
 		state: make(chan int, 100),
@@ -46,11 +46,11 @@ func newManager() *Manager {
 	}
 }
 
-func (m *Manager) addHub(h *Hub) {
+func (m *manager) addHub(h *hub) {
 	m.hub = h
 }
 
-func (m *Manager) start(ctx context.Context, logger log.Logger) error {
+func (m *manager) start(ctx context.Context, logger log.Logger) error {
 	for {
 		select {
 		case write := <-m.dbus:
@@ -74,8 +74,7 @@ func (m *Manager) start(ctx context.Context, logger log.Logger) error {
 			f := m.queue.Front()
 			if f == nil {
 				val = dWrite{
-					id:   -1,
-					name: "",
+					id: -1,
 				}
 			} else {
 				m.queue.Remove(f)
@@ -102,7 +101,7 @@ func (m *Manager) start(ctx context.Context, logger log.Logger) error {
 	}
 }
 
-func (m *Manager) addEntry(id int, name string) {
+func (m *manager) addEntry(id int, name string) {
 	a := dWrite{
 		id:   id,
 		name: name,
@@ -111,7 +110,7 @@ func (m *Manager) addEntry(id int, name string) {
 	m.dbus <- a
 }
 
-func (m *Manager) removeEntry(id int, name string) {
+func (m *manager) removeEntry(id int, name string) {
 	a := dWrite{
 		id:   id,
 		name: name,
@@ -120,9 +119,9 @@ func (m *Manager) removeEntry(id int, name string) {
 	m.dbusRemove <- a
 }
 
-func (m *Manager) requestEntry() (int, error) {
+func (m *manager) requestEntry() (int, error) {
 	if m.queue.Len() <= 0 {
-		return 0, ErrNoItems
+		return 0, errNoItems
 	}
 
 	cc := dRead{
@@ -137,7 +136,7 @@ func (m *Manager) requestEntry() (int, error) {
 }
 
 // arg should be either 0: accept/ 2: reject
-func (m *Manager) makeDbusCall(arg int) (string, error) {
+func (m *manager) makeDbusCall(arg int) (string, error) {
 	id, err := m.requestEntry()
 
 	if err != nil {
@@ -157,7 +156,7 @@ func (m *Manager) makeDbusCall(arg int) (string, error) {
 	return ids, nil
 }
 
-func (m *Manager) reject() (string, error) {
+func (m *manager) reject() (string, error) {
 	id, err := m.makeDbusCall(2)
 
 	if err != nil {
@@ -167,7 +166,7 @@ func (m *Manager) reject() (string, error) {
 	return id, nil
 }
 
-func (m *Manager) accept() (string, error) {
+func (m *manager) accept() (string, error) {
 	id, err := m.makeDbusCall(0)
 
 	if err != nil {

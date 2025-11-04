@@ -11,7 +11,7 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-func listen_dbus(ctx context.Context, logger log.Logger, mm *Manager) error {
+func listenDbus(ctx context.Context, logger log.Logger, mm *manager) error {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		level.Error(logger).Log(

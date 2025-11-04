@@ -14,7 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type WebSocketClient struct {
+type webSocketClient struct {
 	logger         log.Logger
 	URL            url.URL
 	socketPath     string
@@ -26,8 +26,8 @@ type WebSocketClient struct {
 	mu             sync.Mutex
 }
 
-func NewWebSocketClient(logger log.Logger, serverURL url.URL, socketPath string) *WebSocketClient {
-	return &WebSocketClient{
+func newWebSocketClient(logger log.Logger, serverURL url.URL, socketPath string) *webSocketClient {
+	return &webSocketClient{
 		URL:            serverURL,
 		receive:        make(chan []byte, 100),
 		reconnect:      true,
@@ -40,7 +40,7 @@ func NewWebSocketClient(logger log.Logger, serverURL url.URL, socketPath string)
 	}
 }
 
-func (c *WebSocketClient) Connect() error {
+func (c *webSocketClient) Connect() error {
 	dialer := websocket.Dialer{
 		NetDial:          func(network, addr string) (net.Conn, error) { return net.Dial("unix", c.socketPath) },
 		HandshakeTimeout: 5 * time.Second,
@@ -62,7 +62,7 @@ func (c *WebSocketClient) Connect() error {
 	return nil
 }
 
-func (c *WebSocketClient) readPump() {
+func (c *webSocketClient) readPump() {
 	defer func() {
 		c.mu.Lock()
 		if c.conn != nil {
@@ -97,7 +97,7 @@ func (c *WebSocketClient) readPump() {
 	}
 }
 
-func (c *WebSocketClient) reconnectLoop() {
+func (c *webSocketClient) reconnectLoop() {
 	delay := c.reconnectDelay
 
 	for c.reconnect {
@@ -118,7 +118,7 @@ func (c *WebSocketClient) reconnectLoop() {
 
 }
 
-func (c *WebSocketClient) Receive() ([]byte, error) {
+func (c *webSocketClient) Receive() ([]byte, error) {
 	select {
 	case message := <-c.receive:
 		return message, nil
@@ -127,7 +127,7 @@ func (c *WebSocketClient) Receive() ([]byte, error) {
 	}
 }
 
-func (c *WebSocketClient) Close() {
+func (c *webSocketClient) Close() {
 	c.reconnect = false
 
 	c.mu.Lock()
@@ -140,7 +140,7 @@ func (c *WebSocketClient) Close() {
 func startListenerClient(ctx context.Context, logger log.Logger, socketPath string) error {
 	u := url.URL{Scheme: "ws", Host: "unix", Path: "/ws"}
 
-	client := NewWebSocketClient(logger, u, socketPath)
+	client := newWebSocketClient(logger, u, socketPath)
 
 	if err := client.Connect(); err != nil {
 		level.Error(logger).Log("msg", "Failed to connect to client", "err", err)

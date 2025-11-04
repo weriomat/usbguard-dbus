@@ -21,10 +21,10 @@ import (
 
 var (
 	re         = regexp.MustCompile(`name "\S[^"]+"`)
-	ErrNoItems = errors.New("No usb device available")
+	errNoItems = errors.New("no usb device available")
 )
 
-func dialApi(ctx context.Context, logger log.Logger, socketPath string, endpoint string) error {
+func dialAPI(ctx context.Context, logger log.Logger, socketPath string, endpoint string) error {
 	httpc := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
@@ -83,7 +83,7 @@ func main() {
 
 			logger := log.With(logger, "component", "accept")
 
-			err := dialApi(ctx, logger, *socketPath, "/accept")
+			err := dialAPI(ctx, logger, *socketPath, "/accept")
 
 			return err
 		})
@@ -93,7 +93,7 @@ func main() {
 
 			logger := log.With(logger, "component", "accept")
 
-			err := dialApi(ctx, logger, *socketPath, "/reject")
+			err := dialAPI(ctx, logger, *socketPath, "/reject")
 
 			return err
 		})
@@ -107,7 +107,7 @@ func main() {
 
 			level.Info(logger).Log("msg", "Dbus listener started")
 
-			err := listen_dbus(ctx, logger, manager)
+			err := listenDbus(ctx, logger, manager)
 
 			if err == nil {
 				level.Info(logger).Log("msg", "Stopped dbus listener")

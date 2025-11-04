@@ -35,8 +35,6 @@ const (
 )
 
 var (
-	newline  = []byte{'\n'}
-	space    = []byte{' '}
 	upgrader = websocket.Upgrader{
 		ReadBufferSize: 1024, WriteBufferSize: 1024,
 		CheckOrigin: func(r *http.Request) bool { // Configure origin checking for production
@@ -49,9 +47,9 @@ func generateID() string {
 	return fmt.Sprintf("client_%d", time.Now().UnixNano())
 }
 
-type Client struct {
+type client struct {
 	ID  string
-	hub *Hub
+	hub *hub
 
 	// The websocket connection.
 	conn *websocket.Conn
@@ -60,7 +58,7 @@ type Client struct {
 	send chan []byte
 }
 
-func (c *Client) readPump() {
+func (c *client) readPump() {
 	defer func() {
 		level.Info(c.hub.logger).Log("msg", "Closing read pump of client", "client", c.ID)
 		c.hub.unregister <- c
@@ -82,7 +80,7 @@ func (c *Client) readPump() {
 	}
 }
 
-func (c *Client) writePump() {
+func (c *client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -124,7 +122,7 @@ func (c *Client) writePump() {
 }
 
 // serveWs handles websocket requests from the peer.
-func (h *Hub) serveWs(w http.ResponseWriter, r *http.Request) {
+func (h *hub) serveWs(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		level.Error(h.logger).Log("msg", "Failed to upgrade connection", "err", err)
@@ -137,7 +135,7 @@ func (h *Hub) serveWs(w http.ResponseWriter, r *http.Request) {
 		clientID = generateID()
 	}
 
-	client := &Client{
+	client := &client{
 		hub:  h,
 		conn: conn,
 		send: make(chan []byte, 256),
@@ -152,39 +150,39 @@ func (h *Hub) serveWs(w http.ResponseWriter, r *http.Request) {
 	go client.readPump()
 }
 
-type Hub struct {
+type hub struct {
 	// Context
 	ctx context.Context
 
 	// Logger
 	logger log.Logger
 	// Registered clients.
-	clients map[*Client]bool
+	clients map[*client]bool
 
 	// Inbound messages from the clients.
 	broadcast chan []byte
 
 	// Register requests from the clients.
-	register chan *Client
+	register chan *client
 
 	// Unregister requests from clients.
-	unregister chan *Client
+	unregister chan *client
 	mu         sync.RWMutex
 }
 
-func newHub(ctx context.Context, logger log.Logger) *Hub {
-	return &Hub{
+func newHub(ctx context.Context, logger log.Logger) *hub {
+	return &hub{
 		broadcast:  make(chan []byte),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		clients:    make(map[*Client]bool),
+		register:   make(chan *client),
+		unregister: make(chan *client),
+		clients:    make(map[*client]bool),
 		ctx:        ctx,
 		logger:     logger,
 		mu:         sync.RWMutex{},
 	}
 }
 
-func (h *Hub) run() {
+func (h *hub) run() {
 	for {
 		select {
 		case client := <-h.register:
@@ -209,7 +207,7 @@ func (h *Hub) run() {
 	}
 }
 
-func (h *Hub) broadcastMessage(message []byte, exclude *Client) {
+func (h *hub) broadcastMessage(message []byte, exclude *client) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -228,7 +226,7 @@ func (h *Hub) broadcastMessage(message []byte, exclude *Client) {
 
 }
 
-func webserver(ctx context.Context, logger log.Logger, mm *Manager) error {
+func webserver(ctx context.Context, logger log.Logger, mm *manager) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
